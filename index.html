@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Solo Travel Safety App</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+  <!-- Google Charts -->
+  <script src="https://www.gstatic.com/charts/loader.js"></script>
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Poppins', sans-serif; background: #f0f4f8; color: #333; text-align: center; padding-bottom: 4rem; }
+    h1 { background: linear-gradient(to right, #0f2027, #203a43, #2c5364); color: #fff; padding: 22px 0; font-size: 2rem; box-shadow: 0 4px 10px rgba(0,0,0,.2); }
+    #map { width: 100%; height: 65vh; border-bottom: 2px solid #ccc; box-shadow: inset 0 -2px 5px rgba(0,0,0,.1); }
+    .controls { margin: 14px 0; }
+    label { font-weight: 600; margin-right: 8px; }
+    input[type=number] { width: 110px; padding: 8px; border: 1px solid #ccc; border-radius: 8px; margin-right: 10px; }
+    button { padding: 10px 20px; font-size: 1rem; border: none; border-radius: 10px; background: #2ecc71; color: #fff; cursor: pointer; transition: background .3s; }
+    button:hover { background: #27ae60; }
+    #status { margin: 20px auto 24px; padding: 12px 20px; font-size: 1.1rem; font-weight: 700; border-radius: 10px; background: #fff; width: max-content; box-shadow: 0 0 10px rgba(0,0,0,.08); }
+    .fa-marker { background: transparent; border: none; }
+    #chart_div { width: 90%; max-width: 500px; height: 350px; margin: 30px auto; display: none; }
+    #zoneDetails { max-width: 90%; margin: 0 auto; display: none; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { padding: 8px 12px; border: 1px solid #ddd; }
+    th { background: #2ecc71; color: white; }
+    td a { color: #2980b9; text-decoration: none; }
+  </style>
+</head>
+
+<body>
+  <h1>🌍 Solo Travel Safety</h1>
+  <div id="map"></div>
+
+  <div class="controls">
+    <label>Geofence radius (m):
+      <input type="number" id="radiusInput" value="500" min="10" step="10" />
+    </label>
+    <button onclick="setGeofence()">Set / Update Geofence</button>
+  </div>
+
+  <div class="controls">
+    <button onclick="findNearby('police')">Show Nearby Police</button>
+    <button onclick="findNearby('hospital')">Show Nearby Hospitals</button>
+  </div>
+
+  <div class="controls">
+    <button onclick="findSafeZones()">Find Nearby Safe Zones</button>
+  </div>
+
+  <div id="status">Click on the map to set your geofence center.</div>
+  <div id="chart_div"></div>
+  <div id="zoneDetails"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const WHATSAPP_NUMBER = "919866522663";
+
+    google.charts.load('current', { packages: ['corechart'] });
+
+    let map, userMarker, geofenceCircle;
+    let geofenceCenter = null, geofenceRadius = 500;
+    let currentLat = 0, currentLng = 0;
+    let alertSent = false;
+    const placeMarkers = [];
+
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        currentLat = pos.coords.latitude;
+        currentLng = pos.coords.longitude;
+        initMap(currentLat, currentLng, true);
+      },
+      err => {
+        console.warn("Location blocked, using default center.");
+        initMap(20.5937, 78.9629, false); // India fallback
+        document.getElementById("status").textContent = "📍 Location unavailable – default view.";
+      }
+    );
+
+    function initMap(lat, lng, enableWatch) {
+      map = L.map("map").setView([lat, lng], 13);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
+      userMarker = L.marker([lat, lng]).addTo(map).bindPopup("You are here").openPopup();
+      map.on("click", e => {
+        geofenceCenter = e.latlng;
+        drawGeofence();
+        document.getElementById("status").textContent = "Geofence center set.";
+      });
+
+      if (enableWatch) {
+        navigator.geolocation.watchPosition(updatePosition, console.error, {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 7000
+        });
+      }
+    }
+
+    function updatePosition(pos) {
+      currentLat = pos.coords.latitude;
+      currentLng = pos.coords.longitude;
+      userMarker.setLatLng([currentLat, currentLng]);
+      map.panTo([currentLat, currentLng]);
+      checkGeofence(currentLat, currentLng);
+    }
+
+    function setGeofence() {
+      const v = parseInt(document.getElementById("radiusInput").value, 10);
+      if (!isNaN(v) && v > 0) geofenceRadius = v;
+      drawGeofence();
+    }
+
+    function drawGeofence() {
+      if (!geofenceCenter) return;
+      if (geofenceCircle) map.removeLayer(geofenceCircle);
+      geofenceCircle = L.circle(geofenceCenter, {
+        radius: geofenceRadius,
+        color: "red",
+        fillColor: "#f03",
+        fillOpacity: 0.15
+      }).addTo(map);
+    }
+
+    function checkGeofence(lat, lng) {
+      if (!geofenceCenter) return;
+      const dist = map.distance(geofenceCenter, L.latLng(lat, lng));
+      const status = document.getElementById("status");
+      if (dist > geofenceRadius) {
+        status.textContent = `⚠️ Outside geofence (${Math.round(dist)} m)`;
+        status.style.color = "red";
+        if (!alertSent) {
+          alertSent = true;
+          alert("🚨 You have breached the geofence!");
+          sendWhatsApp(lat, lng);
+        }
+      } else {
+        status.textContent = `✅ Inside geofence (${Math.round(dist)} m)`;
+        status.style.color = "green";
+        alertSent = false;
+      }
+    }
+
+    function sendWhatsApp(lat, lng) {
+      if (!/^\d{10,15}$/.test(WHATSAPP_NUMBER)) {
+        alert("⚠️ Invalid WhatsApp number.");
+        return;
+      }
+      const text = `🚨 Geofence breached!\nLocation: https://maps.google.com/?q=${lat},${lng}`;
+      window.open(`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(text)}`, "_blank");
+    }
+
+    function findNearby(type) {
+      if (!map) return;
+      placeMarkers.forEach(m => map.removeLayer(m));
+      placeMarkers.length = 0;
+      const q = `[out:json][timeout:25];node(around:3000,${currentLat},${currentLng})["amenity"="${type}"];out;`;
+      fetch("https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(q))
+        .then(r => r.json())
+        .then(d => {
+          if (!d.elements.length) {
+            alert(`No nearby ${type}s within 3 km.`);
+            return;
+          }
+          d.elements.forEach(el => {
+            const name = el.tags?.name || (type === "hospital" ? "Hospital" : "Police Station");
+            const iconHTML = type === "hospital"
+              ? '<i class="fa-solid fa-house-chimney-medical" style="font-size:28px;color:#d32f2f;"></i>'
+              : '<i class="fa-solid fa-shield-halved" style="font-size:28px;color:#1565c0;"></i>';
+            const icon = L.divIcon({ html: iconHTML, className: "fa-marker", iconSize: [28, 28], iconAnchor: [14, 28] });
+            placeMarkers.push(L.marker([el.lat, el.lon], { icon }).addTo(map).bindPopup(name));
+          });
+        })
+        .catch(e => {
+          console.error(e);
+          alert("Failed to load nearby places.");
+        });
+    }
+
+    function findSafeZones() {
+      document.getElementById("chart_div").style.display = "none";
+      document.getElementById("zoneDetails").style.display = "none";
+      const query = `[out:json];node(around:2000,${currentLat},${currentLng})["name"];out center;`;
+      fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: query })
+        .then(r => r.json())
+        .then(d => processZones(d.elements));
+    }
+
+    function processZones(elements) {
+      const zones = elements.filter(e => e.tags?.name).map(e => ({
+        name: e.tags.name,
+        lat: e.lat,
+        lng: e.lon,
+        type: e.tags.amenity || e.tags.leisure || e.tags.highway || "unknown",
+        dist: getDistance(currentLat, currentLng, e.lat, e.lon)
+      })).sort((a, b) => a.dist - b.dist).slice(0, 3);
+      renderZones(zones);
+    }
+
+    function renderZones(zs) {
+      document.getElementById("status").textContent = `📍 Your location: (${currentLat.toFixed(3)}, ${currentLng.toFixed(3)})`;
+      document.getElementById("chart_div").style.display = "block";
+      document.getElementById("zoneDetails").style.display = "block";
+      drawChart(zs);
+      drawTable(zs);
+    }
+
+    function drawChart(zs) {
+      const data = google.visualization.arrayToDataTable(
+        [['Zone', 'Distance (km)'], ...zs.map(z => [z.name, z.dist])]
+      );
+      new google.visualization.PieChart(document.getElementById('chart_div'))
+        .draw(data, { title: 'Distance to Nearby Zones', pieHole: 0.4 });
+    }
+
+    function drawTable(zs) {
+      let html = '<h3>📋 Nearby Zones</h3><table><tr><th>Name</th><th>Type</th><th>Distance (km)</th><th>Lat</th><th>Lng</th></tr>';
+      zs.forEach(z => {
+        html += `<tr><td><a href="https://www.google.com/maps/search/?api=1&query=${z.lat},${z.lng}" target="_blank">${z.name}</a></td>
+                 <td>${z.type}</td><td>${z.dist.toFixed(2)}</td><td>${z.lat.toFixed(6)}</td><td>${z.lng.toFixed(6)}</td></tr>`;
+      });
+      document.getElementById("zoneDetails").innerHTML = html + "</table>";
+    }
+
+    function toRad(d) { return d * Math.PI / 180; }
+    function getDistance(a, b, c, d) {
+      const R = 6371, dLat = toRad(c - a), dLon = toRad(d - b);
+      const x = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a)) * Math.cos(toRad(c)) * Math.sin(dLon / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+    }
+  </script>
+</body>
+</html>
